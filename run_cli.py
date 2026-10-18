@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 
 from src.clients.cache import CacheStore
@@ -15,13 +16,13 @@ from src.fuse.engine import ArbitrationEngine
 from src.verify.verifier import JevClaimVerifier
 
 
-async def run_probe():
+async def run_probe(is_mock: bool = True):
     print("\n" + "=" * 70)
     print("PHASE 1: JEV CALIBRATION PROBE (LLM-AggreFact)")
     print("=" * 70)
 
     cache = CacheStore()
-    client = JevDecisionsClient(mock_mode=True, cache_store=cache)
+    client = JevDecisionsClient(mock_mode=is_mock, cache_store=cache)
     verifier = JevClaimVerifier(client=client)
     runner = BenchmarkRunner(verifier)
 
@@ -32,6 +33,7 @@ async def run_probe():
     print(f"  - Calibration split: {len(cal_set)} instances")
     print(f"  - Validation split:  {len(val_set)} instances")
     print(f"  - Test split:        {len(test_set)} instances (Held-out)")
+    print(f"  - Mode:              {'Offline Mock Mode ($0 cost)' if is_mock else 'Live OpenRouter Decisions API'}")
     print("\nFitting recalibration scalers and evaluating test split...")
 
     results = await runner.run_phase1_calibration_probe(cal_set, test_set)
@@ -53,15 +55,22 @@ async def run_probe():
     print(f"Mean option-invariance divergence:     {results['mean_option_invariance_divergence']:.5f}")
 
 
-async def run_arbitration():
+async def run_arbitration(
+    strategy: str = "calibrated_fusion",
+    is_mock: bool = True,
+    example_idx: int = 0,
+):
     print("\n" + "=" * 70)
-    print("LIVE ARBITRATION DEMO (HotpotQA Multi-Agent)")
+    has_jev = strategy in ("raw_jev", "calibrated_jev", "calibrated_fusion")
+    jev_label = f"WITH Jev ({'Mock' if is_mock else 'Live OpenRouter'})" if has_jev else "WITHOUT Jev (Baseline Multi-Agent Voting)"
+    print(f"ARBITRATION RUNNER: [{strategy.upper()}] — {jev_label}")
     print("=" * 70)
 
-    qa = get_sample_multihop_instances()[0]
+    samples = get_sample_multihop_instances()
+    qa = samples[example_idx % len(samples)]
     print(f"Query: {qa.question}\n")
 
-    client = JevDecisionsClient(mock_mode=True)
+    client = JevDecisionsClient(mock_mode=is_mock)
     verifier = JevClaimVerifier(client=client)
     engine = ArbitrationEngine(verifier=verifier)
 
@@ -70,30 +79,49 @@ async def run_arbitration():
         candidate_responses=qa.candidate_responses,
         candidate_confidences=qa.candidate_confidences,
         reference_documents=qa.passages,
-        strategy="calibrated_fusion",
+        strategy=strategy,
     )
 
-    print(f"{'Sub-Claim Proposition':<50} | {'Votes':<5} | {'Eff.Ag':<7} | {'Jev P':<6} | {'Fused P':<8} | {'Status':<10}")
-    print("-" * 96)
+    print(f"{'Sub-Claim Proposition':<48} | {'Votes':<5} | {'Eff.Ag':<7} | {'Jev P':<6} | {'Fused P':<8} | {'Status':<10}")
+    print("-" * 94)
     for ac in res.arbitrated_claims:
-        print(f"{ac.canonical_claim[:50]:<50} | {ac.agreement_count}/4   | {ac.effective_agreement_ratio:<7.2f} | {ac.calibrated_jev_prob:<6.2f} | {ac.fused_prob:<8.2f} | {ac.status:<10}")
+        print(f"{ac.canonical_claim[:48]:<48} | {ac.agreement_count}/4   | {ac.effective_agreement_ratio:<7.2f} | {ac.calibrated_jev_prob:<6.2f} | {ac.fused_prob:<8.2f} | {ac.status:<10}")
 
     print("\n" + "-" * 70)
     print("FINAL ASSEMBLED ANSWER (Exclusively from verified claims):")
     print(res.final_answer)
     print("-" * 70)
-    print(f"Latency: {res.total_latency_ms:.1f}ms | API Cost: ${res.total_cost_usd:.5f} | N_eff: {res.effective_independent_votes:.2f}\n")
+    print(f"Latency: {res.total_latency_ms:.1f}ms | Cost: ${res.total_cost_usd:.5f} | N_eff: {res.effective_independent_votes:.2f}\n")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Jev-Arbiter CLI Runner")
-    parser.add_argument("command", choices=["probe", "arbitrate"], default="probe", nargs="?")
+    parser.add_argument("command", choices=["probe", "arbitrate"], default="arbitrate", nargs="?")
+    parser.add_argument(
+        "--strategy",
+        choices=["majority_vote", "self_confidence", "raw_jev", "calibrated_jev", "calibrated_fusion"],
+        default="calibrated_fusion",
+        help="Arbitration strategy: majority_vote / self_confidence (WITHOUT Jev), or raw_jev / calibrated_jev / calibrated_fusion (WITH Jev)",
+    )
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help="Execute against live OpenRouter Decisions API (requires OPENROUTER_API_KEY). Default is offline mock mode.",
+    )
+    parser.add_argument(
+        "--example",
+        type=int,
+        default=0,
+        help="Example index from HotpotQA multi-hop benchmark (0, 1, or 2)",
+    )
     args = parser.parse_args()
 
+    is_mock = not args.live
+
     if args.command == "probe":
-        asyncio.run(run_probe())
+        asyncio.run(run_probe(is_mock=is_mock))
     elif args.command == "arbitrate":
-        asyncio.run(run_arbitration())
+        asyncio.run(run_arbitration(strategy=args.strategy, is_mock=is_mock, example_idx=args.example))
 
 
 if __name__ == "__main__":

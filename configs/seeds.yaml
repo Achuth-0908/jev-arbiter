@@ -1,0 +1,5 @@
+split_seed: 42
+bootstrap_seed: 1337
+perturbation_seed: 2024
+sampling_seed: 777
+clustering_seed: 101

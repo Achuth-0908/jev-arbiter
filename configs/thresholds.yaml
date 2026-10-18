@@ -1,0 +1,28 @@
+# Pre-registered thresholds and validation criteria
+# Pre-registration Rule: These thresholds MUST NOT be modified after test set evaluation.
+
+acceptance_threshold: 0.70
+abstention_threshold: 0.40
+clip_bounds: [0.01, 0.99]
+
+# Gate 1 Criteria (Phase 1: Jev Calibration Probe)
+gate1:
+  target_auroc_min: 0.75
+  target_ece_max: 0.08
+  target_brier_max: 0.12
+  nondeterminism_divergence_max: 0.03
+
+# Gate 2 Criteria (Phase 3: Calibrated Fusion)
+gate2:
+  significance_level_alpha: 0.05
+  bootstrap_iterations: 1000
+  target_accuracy_gain_over_majority_vote: 0.03
+  target_selective_accuracy_at_80_coverage: 0.85
+
+# Logistic Fusion Feature Weights (Initialized or pre-registered defaults)
+fusion_features:
+  - "calibrated_jev_prob"
+  - "agent_agreement_ratio"
+  - "effective_independent_votes"
+  - "mean_self_reported_confidence"
+  - "bm25_retrieval_score"

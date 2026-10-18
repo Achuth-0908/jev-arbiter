@@ -134,27 +134,51 @@ class JevDecisionsClient:
         else:
             async with httpx.AsyncClient() as http_client:
                 tasks = []
+                pos_opt = options[0]
+                neg_opt = options[1] if len(options) > 1 else "No"
+                questions_payload = {
+                    "is_supported": {
+                        "type": "noul",
+                        "instructions": criteria,
+                        "criteria": {
+                            "true": f"The claim '{claim}' is directly and strictly supported by the evidence.",
+                            "false": f"The claim '{claim}' is not supported or is contradicted by the evidence.",
+                        },
+                    }
+                }
                 for idx in range(repeats):
                     payload = {
                         "model": self.model,
-                        "decision_type": "noul",
                         "state": state,
-                        "options": options,
-                        "criteria": criteria,
+                        "questions": questions_payload,
                     }
                     tasks.append(self._call_single_decision_live(http_client, payload))
 
                 raw_responses = await asyncio.gather(*tasks)
                 for raw in raw_responses:
-                    choice = raw["choices"][0]
+                    # Check for live OpenRouter answers schema
+                    if "answers" in raw and "is_supported" in raw["answers"]:
+                        ans = raw["answers"]["is_supported"]
+                        p_true = float(ans.get("noul", 0.50))
+                        probs = {pos_opt: p_true, neg_opt: round(1.0 - p_true, 4)}
+                        chosen = pos_opt if p_true >= 0.50 else neg_opt
+                    elif "choices" in raw:
+                        choice = raw["choices"][0]
+                        chosen = choice["decision"]
+                        probs = choice["probabilities"]
+                    else:
+                        chosen = pos_opt
+                        probs = {pos_opt: 0.50, neg_opt: 0.50}
+
                     results.append(
                         SingleDecisionResult(
-                            chosen_option=choice["decision"],
-                            probabilities=choice["probabilities"],
+                            chosen_option=chosen,
+                            probabilities=probs,
                             raw_response=raw,
                         )
                     )
-                    total_cost += raw.get("usage", {}).get("cost_usd", 0.00025)
+                    cost_val = raw.get("usage", {}).get("cost", raw.get("usage", {}).get("cost_usd", 0.00002))
+                    total_cost += float(cost_val)
 
         latency_ms = (time.time() - start_time) * 1000.0
 

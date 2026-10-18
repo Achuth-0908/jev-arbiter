@@ -91,6 +91,8 @@ class ClaimExtractor:
                 line.strip().lstrip("-* ").strip()
                 for line in resp.content.split("\n")
                 if len(line.strip().lstrip("-* ").strip().split()) >= 3
+                and not line.strip().lower().startswith(("here are", "here is", "claims:", "extracted claims:", "based on"))
+                and not line.strip().endswith(":")
             ]
             if extracted_lines:
                 return [

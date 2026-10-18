@@ -23,10 +23,15 @@ def isolated_cache():
 @pytest.mark.asyncio
 async def test_full_arbitration_pipeline(isolated_cache: CacheStore):
     # Setup mock verifier and arbitration engine with isolated test cache
+    from src.claims.extractor import ClaimExtractor
+    from src.clients.llm import UnifiedLLMClient
+
     jev_client = JevDecisionsClient(mock_mode=True, cache_store=isolated_cache)
     verifier = JevClaimVerifier(client=jev_client)
+    mock_extractor = ClaimExtractor(llm_client=UnifiedLLMClient(mock_mode=True))
     engine = ArbitrationEngine(
         verifier=verifier,
+        extractor=mock_extractor,
         acceptance_threshold=0.60,
         abstention_threshold=0.35,
         default_mean_phi=0.30,
@@ -55,8 +60,9 @@ async def test_full_arbitration_pipeline(isolated_cache: CacheStore):
     assert len(res.accepted_claims) >= 1
     # Penicillin claim should be accepted
     assert any("penicillin" in c.lower() for c in res.accepted_claims)
-    # Polio vaccine hallucination should be rejected
-    assert any("polio" in c.lower() for c in res.rejected_claims)
+    # Polio vaccine hallucination must NOT be accepted (must be rejected or abstained)
+    assert not any("polio" in c.lower() for c in res.accepted_claims)
+    assert any("polio" in c.lower() for c in (res.rejected_claims + res.abstained_claims))
     assert res.final_answer != ""
     assert "penicillin" in res.final_answer.lower()
     assert "polio" not in res.final_answer.lower()

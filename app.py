@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -73,6 +76,39 @@ def get_shared_cache() -> CacheStore:
 
 cache_store = get_shared_cache()
 
+RUNS_DIR = Path(__file__).resolve().parent / "results" / "runs"
+
+
+def load_latest_run():
+    """Newest Phase 1 run that scored the test split (else the newest run), or None. Reads artifacts only."""
+    dirs = sorted(RUNS_DIR.glob("phase1-*"), key=lambda p: p.stat().st_mtime, reverse=True) if RUNS_DIR.exists() else []
+    loaded = []
+    for d in dirs:
+        try:
+            man = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
+            met = json.loads((d / "metrics.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        loaded.append((d, man, met))
+    if not loaded:
+        return None
+    d, man, met = next((x for x in loaded if x[1].get("test_scored")), loaded[0])
+    frames = {}
+    for split in ("val", "test"):
+        f = d / f"records_{split}.parquet"
+        if f.exists():
+            frames[split] = pd.read_parquet(f)
+    return {"dir": d, "manifest": man, "metrics": met, "frames": frames}
+
+
+def fmt_ci(m, key):
+    """'point [lo, hi]' from a metrics.json cell, tolerating missing values."""
+    v = (m or {}).get(key)
+    if not isinstance(v, dict) or v.get("point") is None:
+        return "n/a"
+    lo, hi = v.get("lo"), v.get("hi")
+    return f"{v['point']:.3f}" if lo is None or hi is None else f"{v['point']:.3f} [{lo:.3f}, {hi:.3f}]"
+
 # Sidebar Configuration
 st.sidebar.title("⚙️ System Controls")
 
@@ -129,9 +165,9 @@ st.sidebar.caption(f"Cache Hits: {cache_stats['hits']} | Misses: {cache_stats['m
 # Main Navigation Tabs
 tabs = st.tabs([
     "🧪 Live Arbitration Playground",
-    "📈 Calibration & Reliability Probe",
-    "🔗 Error Correlation & N_eff",
-    "⚖️ Strategy Comparison Benchmark",
+    "📈 Calibration & Reliability",
+    "🔗 N_eff Formula (illustration)",
+    "📊 Phase 1 Results (real runs)",
 ])
 
 
@@ -254,13 +290,42 @@ with tabs[0]:
 
 # TAB 2: Calibration & Reliability Probe
 with tabs[1]:
-    st.markdown("<div class='main-title'>Phase 1: Jev Calibration Probe</div>", unsafe_allow_html=True)
+    st.markdown("<div class='main-title'>Jev Calibration & Reliability</div>", unsafe_allow_html=True)
     st.markdown(
-        "<div class='subtitle'>Empirical evaluation of Jev calibration on LLM-AggreFact: Raw vs Temperature Scaled vs Isotonic.</div>",
+        "<div class='subtitle'>Real reliability diagram from the latest Phase 1 run's per-claim records (LLM-AggreFact).</div>",
         unsafe_allow_html=True,
     )
 
-    if st.button("📊 Run Held-Out Calibration Probe (LLM-AggreFact)", type="secondary"):
+    run_cal = load_latest_run()
+    frames = (run_cal or {}).get("frames", {})
+    split_name = "test" if "test" in frames else ("val" if "val" in frames else None)
+    if run_cal is None or split_name is None or "p_selected" not in frames[split_name].columns:
+        st.info("No Phase 1 run records found. Run `python -m src.runs phase1` to produce them (git-ignored: they derive from a licensed dataset).")
+    else:
+        rec = frames[split_name]
+        rec = rec[(rec["error"] == "") & rec["raw_p"].notna()]
+        sel = run_cal["metrics"].get("selected_calibrator", "selected")
+        fig_r, ax_r = plt.subplots(figsize=(6.5, 5))
+        ax_r.plot([0, 1], [0, 1], "k--", label="Perfect calibration")
+        for col, label, style, color in (("raw_p", "Raw Jev", "s-", "#DC2626"), ("p_selected", f"Recalibrated ({sel})", "o-", "#2563EB")):
+            _, accs, confs, counts = reliability_curve(rec["label"].values, rec[col].values, n_bins=10)
+            xs = [c for c, n in zip(confs, counts) if n >= 10]
+            ys = [a for a, n in zip(accs, counts) if n >= 10]
+            ax_r.plot(xs, ys, style, color=color, label=label)
+        ax_r.set_xlabel("Mean predicted P(supported)")
+        ax_r.set_ylabel("Observed fraction supported")
+        ax_r.set_title(f"Reliability, {split_name.upper()} split, n={len(rec)} (bins with >= 10 claims)")
+        ax_r.legend()
+        ax_r.grid(True, alpha=0.3)
+        st.pyplot(fig_r)
+        st.caption(
+            f"Run {run_cal['manifest']['run_id']}. Pooled over 11 datasets with different positive rates, so the pooled curve hides "
+            "per-dataset miscalibration (see the Phase 1 Results tab and docs/JEV_FINDINGS.md)."
+        )
+
+    st.markdown("---")
+    st.markdown("##### Synthetic fixture demo (mock Jev, 8 templated claims: **not evidence**)")
+    if st.button("Run synthetic-fixture calibration demo", type="secondary"):
         jev_client = JevDecisionsClient(mock_mode=True, cache_store=cache_store)
         verifier = JevClaimVerifier(client=jev_client)
         runner = BenchmarkRunner(verifier)
@@ -297,31 +362,14 @@ with tabs[1]:
             st.metric("AUROC", f"{iso_m['auroc']:.4f}")
             st.metric("Accuracy", f"{iso_m['accuracy']*100:.1f}%")
 
-        # Reliability Diagram Plot
-        st.subheader("Reliability Curves (Calibration Diagrams)")
-        fig, ax = plt.subplots(figsize=(8, 4.5))
-        ax.plot([0, 1], [0, 1], "k--", label="Perfect Calibration")
-
-        # Synthetic curve generation for visual inspection
-        centers = np.linspace(0.05, 0.95, 10)
-        raw_curve = np.clip(centers + (np.sin(centers * np.pi) * 0.12), 0.05, 0.95)
-        temp_curve = np.clip(centers + (np.sin(centers * np.pi) * 0.03), 0.05, 0.95)
-
-        ax.plot(centers, raw_curve, "s-", color="#DC2626", label=f"Raw Jev (ECE: {raw_m['ece']:.3f})")
-        ax.plot(centers, temp_curve, "o-", color="#2563EB", label=f"Temp Scaled (ECE: {temp_m['ece']:.3f})")
-        ax.set_xlabel("Mean Predicted Confidence")
-        ax.set_ylabel("Empirical Accuracy")
-        ax.set_title("Reliability Diagram on Held-out Test Set")
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-        st.pyplot(fig)
+        st.caption("Mock verifier on a templated fixture: these numbers only check that the code runs. See the real diagram above.")
 
 
 # TAB 3: Error Correlation & N_eff
 with tabs[2]:
-    st.markdown("<div class='main-title'>Agent Error Correlation & Information Capacity</div>", unsafe_allow_html=True)
+    st.markdown("<div class='main-title'>Effective Independent Votes: the Formula</div>", unsafe_allow_html=True)
     st.markdown(
-        "<div class='subtitle'>Why majority voting collapses: k agents with correlation phi_bar yield only N_eff independent votes.</div>",
+        "<div class='subtitle'>An illustration of N_eff = k / (1 + (k-1) phi_bar). This is a formula plot, not a measurement.</div>",
         unsafe_allow_html=True,
     )
 
@@ -341,45 +389,93 @@ with tabs[2]:
 
     st.markdown(
         """
-        > **Key Takeaway:** Even with 9 frontier LLMs, if their error correlation reaches $\\bar{\\phi} = 0.40$, 
-        > their collective information capacity collapses to just **$2.14$ independent votes**! 
-        > This explains why simple majority-voting and uncalibrated multi-agent debate plateau early.
+        > **What the formula says:** with k = 9 voters and an average error correlation of $\\bar{\\phi} = 0.40$,
+        > N_eff = 9 / (1 + 8 x 0.40) = **2.14** independent votes.
+        >
+        > **What it does not say:** nothing here is measured for LLM agents. In this repo's one real test (Jev vs a generic
+        > NLI model on 2,200 claims) the measured error correlation was 0.41, yet fusing the two added nothing, because
+        > N_eff ignores that one voter was much less accurate. See `docs/JEV_FINDINGS.md`, section 5b.
         """
     )
 
 
-# TAB 4: Strategy Comparison Benchmark
+# TAB 4: Real Phase 1 results, read from run artifacts (nothing on this tab is typed in)
 with tabs[3]:
-    st.markdown("<div class='main-title'>Arbitration Hierarchy & Pareto Frontier</div>", unsafe_allow_html=True)
+    st.markdown("<div class='main-title'>Phase 1 Results (real runs)</div>", unsafe_allow_html=True)
     st.markdown(
-        "<div class='subtitle'>Comparison across all arbitration rungs: Accuracy, Calibration, Cost, and Latency.</div>",
+        "<div class='subtitle'>Read from results/runs/ artifacts. Jev as a single claim verifier on LLM-AggreFact; "
+        "the multi-agent arbitration stages have NOT been evaluated.</div>",
         unsafe_allow_html=True,
     )
 
-    # Benchmark results table
-    data_rungs = [
-        {"Rung": "1. Single Best Agent (Claude)", "Factual Accuracy": 0.824, "Brier Score": 0.142, "ECE": 0.165, "Cost/Query": "$0.00030", "Latency": "180 ms"},
-        {"Rung": "2. Majority Vote (Unweighted)", "Factual Accuracy": 0.835, "Brier Score": 0.128, "ECE": 0.142, "Cost/Query": "$0.00120", "Latency": "210 ms"},
-        {"Rung": "3. Self-Confidence Weighted", "Factual Accuracy": 0.841, "Brier Score": 0.119, "ECE": 0.138, "Cost/Query": "$0.00120", "Latency": "210 ms"},
-        {"Rung": "4. Raw Jev Argmax", "Factual Accuracy": 0.852, "Brier Score": 0.054, "ECE": 0.092, "Cost/Query": "$0.00195", "Latency": "320 ms"},
-        {"Rung": "5. Calibrated Jev Alone", "Factual Accuracy": 0.868, "Brier Score": 0.043, "ECE": 0.048, "Cost/Query": "$0.00195", "Latency": "320 ms"},
-        {"Rung": "6. Calibrated Fusion (Proposed)", "Factual Accuracy": 0.895, "Brier Score": 0.036, "ECE": 0.039, "Cost/Query": "$0.00210", "Latency": "340 ms"},
-    ]
-    st.table(pd.DataFrame(data_rungs))
+    run = load_latest_run()
+    if run is None:
+        st.info(
+            "No Phase 1 run found. Produce one with `python -m src.runs phase1` (live, needs OPENROUTER_API_KEY) or "
+            "`python -m src.runs phase1 --mode mock` (offline pipeline check; mock scores are not evidence). "
+            "Run artifacts are git-ignored because they derive from a licensed dataset."
+        )
+    else:
+        man, met = run["manifest"], run["metrics"]
+        scored_test = bool(man.get("test_scored") and met.get("test"))
+        split_label = "TEST" if scored_test else "VALIDATION"
+        section = met["test"] if scored_test else met["validation"]
+        if man.get("mode") == "mock":
+            st.warning("This run used the MOCK verifier: its scores only check that the pipeline works. They are not evidence about Jev.")
+        reg = man.get("registration") or {}
+        st.caption(
+            f"Run {man['run_id']} | {man['mode']} mode | requested {man['jev_model']}, "
+            f"resolved {', '.join(man.get('resolved_versions', [])) or 'n/a'} | showing the {split_label} split | "
+            f"pre-registration committed: {reg.get('committed', 'n/a')}"
+        )
 
-    fig_pareto, ax_p = plt.subplots(figsize=(8, 4.5))
-    costs = [0.30, 1.20, 1.20, 1.95, 1.95, 2.10]  # in $ * 1000
-    accs = [82.4, 83.5, 84.1, 85.2, 86.8, 89.5]
-    labels = ["Single Best", "Majority Vote", "Self-Conf", "Raw Jev", "Calibrated Jev", "Calibrated Fusion"]
-    colors = ["#94A3B8", "#64748B", "#F59E0B", "#EF4444", "#3B82F6", "#10B981"]
+        rows = []
+        for name in ("raw", "temperature", "isotonic"):
+            m = section.get(name)
+            if m:
+                rows.append({
+                    "Scores": name, "n": m.get("n"), "AUROC": fmt_ci(m, "auroc"), "Brier": fmt_ci(m, "brier"),
+                    "ECE": fmt_ci(m, "ece"), "Accuracy": fmt_ci(m, "accuracy"),
+                })
+        st.markdown(f"#### {split_label} metrics, 95% cluster-bootstrap CIs (clustered by source document)")
+        st.table(pd.DataFrame(rows))
 
-    ax_p.scatter(costs, accs, c=colors, s=120, zorder=3)
-    for i, label in enumerate(labels):
-        ax_p.annotate(label, (costs[i] + 0.04, accs[i] - 0.2), fontsize=9)
+        gate = met.get("gate1_test") if scored_test else met.get("gate1_validation_preview")
+        if gate:
+            st.markdown("#### Gate 1 " + ("verdict (binding: scored once on the test split)" if scored_test else "preview on validation (not binding)"))
+            st.table(pd.DataFrame([
+                {"Criterion": k, "Value": f"{v['value']:.4f}", "Target": f"{v['op']} {v['target']}", "Result": "PASS" if v["pass"] else "FAIL"}
+                for k, v in gate["criteria"].items()
+            ]))
+            st.markdown(f"**Overall: {'PASS' if gate['all_pass'] else 'FAIL'}**")
 
-    ax_p.plot(costs, accs, "--", color="#CBD5E1", zorder=2)
-    ax_p.set_xlabel("Cost per 1,000 Claims ($)")
-    ax_p.set_ylabel("Factual Accuracy (%)")
-    ax_p.set_title("Cost-Accuracy Pareto Frontier")
-    ax_p.grid(True, alpha=0.3)
-    st.pyplot(fig_pareto)
+        per = met.get("per_dataset_test") if scored_test else met.get("per_dataset_validation")
+        pts = []
+        for ds, d in (per or {}).items():
+            a = (d.get("raw") or {}).get("auroc")
+            if isinstance(a, dict) and a.get("point") is not None:
+                pts.append((ds, a["point"], a.get("lo"), a.get("hi"), (d.get("raw") or {}).get("n")))
+        pts.sort(key=lambda t: t[1])
+        if pts:
+            fig_d, ax_d = plt.subplots(figsize=(8, 4.8))
+            for y, (ds, p, lo, hi, _n) in enumerate(pts):
+                ax_d.plot([p], [y], "o", color="#2563EB", zorder=3)
+                if lo is not None and hi is not None:
+                    ax_d.plot([lo, hi], [y, y], "-", color="#93C5FD", zorder=2)
+            ax_d.set_yticks(range(len(pts)))
+            ax_d.set_yticklabels([f"{t[0]} (n={t[4]})" for t in pts])
+            ax_d.axvline(0.5, color="#94A3B8", ls=":", label="chance")
+            ax_d.set_xlabel("Raw AUROC within dataset (95% CI)")
+            ax_d.set_title(f"Per-dataset discrimination, {split_label} split")
+            ax_d.legend(loc="lower right")
+            ax_d.grid(True, axis="x", alpha=0.3)
+            st.pyplot(fig_d)
+            st.caption("Within-dataset AUROC is the honest measure of claim-level skill: pooled AUROC is inflated by differing positive rates.")
+
+        c = man.get("cost", {})
+        if c.get("claims_scored"):
+            st.caption(
+                f"Cost accounting for this run: {c['claims_scored']} claims, cold-run equivalent ${c['cold_run_equivalent_usd']:.4f} "
+                f"(about ${c['cold_run_equivalent_usd'] / c['claims_scored']:.6f} per claim), spent this run ${c['spent_this_run_usd']:.4f} "
+                "(cached calls cost nothing). Full write-up: docs/JEV_FINDINGS.md"
+            )

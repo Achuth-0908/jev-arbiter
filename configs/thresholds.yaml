@@ -26,3 +26,19 @@ fusion_features:
   - "effective_independent_votes"
   - "mean_self_reported_confidence"
   - "bm25_retrieval_score"
+
+# Phase 1 protocol (pre-registered). Must be registered (python -m src.runs register) before the
+# test split is scored. Changing anything in this file after registration invalidates the lock.
+phase1:
+  calibrators: ["temperature", "isotonic"]
+  selection_rule: "lowest_validation_ece"   # chosen on the validation split only, never on test
+  n_bins: 10
+  # Jev calls per claim. Chosen on calibration+validation data only (test untouched): repeat-1 vs mean-of-3
+  # gave identical AUROC (paired diff -0.0004), 0.9% decision flips, and ~1/3 of the cost.
+  repeats: 1
+  bootstrap_iterations: 1000
+  ci_level: 0.95
+  cluster_unit: "source_document"           # claims on the same document are resampled together
+  pass_rule: "point_estimate_meets_all_gate1_targets"  # CIs are reported alongside, not used to pass
+  nondeterminism_probe_n: 100               # calibration-split claims re-queried with a fresh cache salt
+  wording_probe_n: 100                      # same claims re-queried with paraphrased instructions

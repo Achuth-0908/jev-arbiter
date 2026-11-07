@@ -101,6 +101,37 @@ AUROC 0.875 (pass, target >= 0.75), ECE 0.036 (pass, <= 0.08), nondeterminism 0.
 <= 0.12; CI [0.128, 0.147])**. Verdict as pre-registered: **FAIL**. Registration was committed (`8df7b6c`), but the code
 tree was dirty when the test ran, so the exact code version is not pinned.
 
+## 5b. Anchor: Jev vs a local NLI model, and whether fusing them helps
+
+Baseline: `MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli` (about 184M parameters, MIT licence), run on CPU, fed the **same retrieved
+snippets** as Jev (premise = snippet, hypothesis = claim, 512-token limit), score = P(entailment). Calibration + validation only
+(2,200 claims, 1,649 documents; the test split was not used). Out-of-fold, document-grouped 5-fold CV, identical calibration for both.
+
+| Verifier / calibration | Pooled AUROC | Macro within-dataset AUROC | Brier [95% CI] | ECE |
+|---|---|---|---|---|
+| Jev raw | 0.865 | 0.818 | 0.158 [0.147, 0.169] | 0.083 |
+| Jev domain-aware | 0.889 | 0.808 | **0.128** [0.119, 0.137] | 0.016 |
+| NLI raw | 0.752 | 0.721 | 0.257 [0.242, 0.274] | 0.217 |
+| NLI domain-aware | 0.832 | 0.699 | 0.159 [0.150, 0.168] | 0.030 |
+
+- **Jev beats this NLI model on all 11 datasets** (raw within-dataset AUROC), by +0.015 (FactCheck-GPT) to +0.225 (Wice). Paired
+  tests: domain-aware Brier difference 0.031 and raw pooled AUROC difference 0.111, both p = 0.001.
+- **Error rates at 0.5:** Jev 22.0%, NLI 32.1%. Error correlation phi = **0.408**; both wrong 15.0%, only Jev wrong 7.0%, only NLI wrong 17.2%.
+  Logit correlation 0.646.
+- **Fusing them does not help.** Logistic fusion of the two logits (out-of-fold): domain-aware Brier **0.128** vs Jev alone 0.128
+  (paired difference -0.0001, p = 0.60); macro within-dataset AUROC 0.810 vs 0.808. The fitted weights are Jev +0.69 and NLI +0.03:
+  the fusion simply ignores NLI. The domain-agnostic fusion (0.145) is worse than Jev alone with domain intercepts (0.128).
+- **Effective votes.** The measured phi gives N_eff = 2/(1+phi) = 1.42 "independent votes" of 2. But N_eff assumes equally accurate
+  voters; here one is far weaker, and a clearly worse partner adds no information, so N_eff overstates the gain from combining.
+  A design based on discounting votes by error correlation should also weight by accuracy.
+- **Cost and speed.** NLI is free but slow on this CPU (about 1.8 s per pair, 64 minutes for 2,200 pairs, while sharing the machine);
+  Jev cost about $0.00003 and about 0.17 s per claim at 8 concurrent requests.
+
+Caveats: this is **one generic NLI model**, not a purpose-built factual-consistency model; such specialised models exist and are
+likely stronger (not tested here), so the result is "Jev beats a generic NLI baseline", not "Jev is state of the art". The
+snippets, the 512-token limit and calibration choices were designed around Jev and may not suit NLI. The fusion negative result is
+specific to this weak partner; it does not show that fusing two *comparably strong* verifiers cannot help.
+
 ## 6. Practical guidance (from this evidence)
 
 1. Use `noul` for support/entailment checks; extra question types add cost and little else for this task.
@@ -113,9 +144,8 @@ tree was dirty when the test ran, so the exact code version is not pinned.
 
 ## 7. Not done / unverified
 
-- **NLI baseline (running, results pending):** the same snippets scored by `MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli`, to anchor
-  whether Jev's numbers are good. See the section below once it finishes.
-- No LLM-judge baseline; no comparison with the published LLM-AggreFact leaderboard.
+- Only **one generic NLI baseline** (section 5b), evaluated on calibration+validation, not on the test split. No LLM-judge baseline; no
+  comparison with specialised factual-consistency models or the published LLM-AggreFact leaderboard.
 - Jev 1.14 and `~typesafe/jev-latest` were not tested (version drift unknown); images/`box` out of scope.
 - Domain-aware calibration was not re-run on top-5 / whole-document scores, and not confirmed on the test split.
 - All results are one benchmark family, one pinned snapshot, and the free-tier allowance limited sample sizes
@@ -129,6 +159,10 @@ python scripts/analyze_repeats.py                                     # repeats=
 python scripts/analyze_calibration.py                                 # calibration arms (offline)
 python scripts/ablate_retrieval.py --subset val --variants top5,fulldoc,lenient
 python scripts/explore_outputs.py                                     # noul + choice + score in one call
+python scripts/export_nli_inputs.py                                   # same snippets for the NLI baseline
+python -E -P scripts/nli_score.py data/nli/inputs.parquet data/nli/scores.parquet MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli data/models
+python scripts/compare_nli.py                                         # Jev vs NLI (offline)
+python scripts/fuse_verifiers.py                                      # does fusing them help? (offline)
 ```
 
 Total live spend for everything above: about $0.17 on the OpenRouter key.

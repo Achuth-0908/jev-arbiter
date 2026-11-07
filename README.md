@@ -33,7 +33,9 @@ Caveats you should not skip:
 - The pre-registration is committed, but the working tree was dirty when the test ran, so the exact code
   version is not pinned by that commit (the run manifest records this).
 - Jev's published figures (e.g. a 0.043 Brier) are **unverified** here and come from a different benchmark.
-- There are no baselines yet (LLM judge, NLI), so "AUROC 0.875" is not yet anchored against alternatives.
+- Baselines: against one generic local NLI model on the same snippets (calibration+validation), Jev wins on all 11 datasets
+  (domain-aware Brier 0.128 vs 0.159), and fusing the two does not beat Jev alone. There is no LLM-judge baseline and no
+  comparison with specialised factual-consistency models, so this is not a state-of-the-art claim.
 
 ## Quickstart
 

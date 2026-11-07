@@ -1,13 +1,21 @@
+# Core (enough to run the offline test suite and the Phase 1 pipeline)
 httpx>=0.25.0
 pydantic>=2.0.0
 numpy>=1.24.0
 scipy>=1.10.0
 scikit-learn>=1.3.0
 pandas>=2.0.0
+pyarrow>=14.0.0
 pyyaml>=6.0
 python-dotenv>=1.0.0
 tqdm>=4.65.0
 rank_bm25>=0.2.2
 matplotlib>=3.7.0
+
+# Tests
 pytest>=7.4.0
 pytest-asyncio>=0.21.0
+
+# Optional extras (not needed for the core pipeline or tests):
+#   Streamlit demo app:        pip install "streamlit>=1.30"
+#   Local NLI baseline:        pip install torch "transformers>=4.40"

@@ -38,6 +38,12 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+st.warning(
+    "DEMO ONLY: this app runs on a tiny synthetic fixture and hand-labelled toy questions, so its numbers are "
+    "NOT evidence. Real, leakage-safe results are produced by `python -m src.runs phase1` (see results/runs/).",
+    icon="⚠️",
+)
+
 # Custom Styling
 st.markdown(
     """

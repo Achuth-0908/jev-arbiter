@@ -18,8 +18,9 @@ from src.verify.verifier import JevClaimVerifier
 
 async def run_probe(is_mock: bool = True):
     print("\n" + "=" * 70)
-    print("PHASE 1: JEV CALIBRATION PROBE (LLM-AggreFact)")
+    print("PHASE 1: JEV CALIBRATION PROBE (SYNTHETIC DEMO FIXTURE - NOT EVIDENCE)")
     print("=" * 70)
+    print("For real, leakage-safe, pre-registered results run: python -m src.runs phase1")
 
     cache = CacheStore()
     client = JevDecisionsClient(mock_mode=is_mock, cache_store=cache)

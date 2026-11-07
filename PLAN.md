@@ -1,5 +1,27 @@
 # Calibration-Weighted Multi-Agent Arbitration with Jev (`jev-arbiter`)
 
+> ## Status & Amendments (2026-11-07)
+> This plan was written before any measurement. What has actually been done, and what changed:
+>
+> | Phase | Status |
+> |---|---|
+> | 0 Foundations | Done: content-addressed cache (mode/repeats in key), pooled async client, hashed run specs, pre-registration lock, manifests. |
+> | 1 Jev probe (Gate 1) | Calibration + validation done on real LLM-AggreFact with document-grouped splits and cluster-bootstrap CIs. Test split scored only after registration (see `results/runs/*/report.md`). |
+> | 1b Anchor & diagnose | **New, not started:** LLM-judge / NLI baselines on the same splits, retrieval ablation, dataset-conditioned calibration. |
+> | 2 Multi-agent baselines | Not started (needs claim-level labels and candidate agents). |
+> | 3 Fusion / Gate 2 | Not started. The weights currently in `src/fuse/engine.py` are invented placeholders, not fitted. |
+> | 4 Robustness / cost frontier | Not started. The regex injection filter is unmeasured. |
+> | 5 Demo / write-up | Not started. `app.py` and `run_cli.py` run on a synthetic fixture and are demo-only. |
+> | 6 Distributed verifier mesh | **New, long-term goal.** Plan: pluggable verifiers, queue + stateless workers over the shared cache, then hedging/quorum/fault-injection experiments (developed first against simulated verifiers at $0). |
+>
+> **Amendments (decided on calibration/validation data only, before the test split was scored):**
+> 1. *Gate 1 had two definitions.* This plan lists ECE and AUROC; `configs/thresholds.yaml` also has a Brier target (0.12). The YAML is authoritative and was kept unchanged. Brier on validation is about 0.14, so that criterion is expected to fail and will be reported as such.
+> 2. *Option-name invariance probe replaced.* The live Decisions API takes no `options`, so swapping them sent an identical request and measured nothing. It is replaced by a **wording-invariance** probe (paraphrased instructions).
+> 3. *`repeats` 3 -> 1.* Repeat-1 vs mean-of-3: paired AUROC difference -0.0004, 0.9% decision flips, about one third of the cost. Registered in `thresholds.yaml` (`phase1.repeats`).
+> 4. *Unverified figures.* The Jev statistics quoted below (0.043 Brier, ~1.3% rerun divergence) are carried over from an earlier source and have **not** been verified. Measured on our data: rerun divergence about 0.006 mean |dp| (repeat-3) and the figures in the run reports.
+> 5. *Pooled metrics depend on the sampling mix.* Splits cap each sub-dataset at 200 claims, so pooled ECE/Brier reflect that mixture, and per-dataset results differ widely (e.g. ExpertQA AUROC near chance on validation; cause not yet established, retrieval is a suspect).
+> 6. *Not formally committed beforehand unless stated in the run manifest.* See `AGENTS.md` section 5.
+
 ## 1. Executive Summary & Research Gap
 
 ### The Core Idea
@@ -12,7 +34,7 @@ Standard multi-agent aggregation relies on majority voting (self-consistency) or
 While confidence-weighted voting and atomic claim reassembly exist independently:
 **No existing work evaluates an external typed decision model (TypeSafe Jev `typesafe/jev-1.13` via Decisions API) as an atomic per-claim verifier across a heterogeneous multi-agent pool, coupled with held-out recalibration, agent error-correlation discounting, and a rigorous cost-accuracy frontier.**
 
-Recent evaluations show Jev achieves competitive accuracy and superior Brier scores (e.g. 0.043 vs 0.054 against frontier LLM judges) with non-collapsed probability distributions across the $[0.01, 0.99]$ grid. However, Jev is vulnerable to:
+Recent evaluations are reported to show Jev achieving competitive accuracy and superior Brier scores (e.g. 0.043 vs 0.054 against frontier LLM judges) with non-collapsed probability distributions across the $[0.01, 0.99]$ grid. **[UNVERIFIED: carried over from an earlier source; our own measurements are in `results/runs/`. On our pooled data about 27% of probabilities were below 0.05 or above 0.95.]** However, Jev is vulnerable to:
 1. Workload-specific calibration shift (requiring empirical post-scaling).
 2. Prompt injection and candidate text context rot (requiring decontextualized atomic extraction and BM25 snippet grounding).
 3. Minor nondeterminism (~1.3% rerun divergence) and option-name sensitivity.
@@ -136,9 +158,9 @@ where $\bar{\phi} = \frac{2}{k(k-1)} \sum_{i < j} \phi_{ij}$, and $\phi_{ij}$ is
 ### Phase 1: Jev Calibration Probe (Days 3-4) — **Gate 1**
 - **Objective:** Evaluate `typesafe/jev-1.13` standalone calibration on LLM-AggreFact subset (claims checked against grounding docs).
 - **Split:** 40% calibration, 20% validation (threshold freezing), 40% test.
-- **Protocol:** Noul query repeated 3x. Compute raw vs recalibrated ECE, Brier, AUROC.
-- **Robustness checks:** Option-name swap invariance (Yes/No vs True/False vs A/B), distractor perturbation.
-- **Gate 1 Criterion:** Post-calibration ECE $\le 0.08$ and AUROC $\ge 0.75$. If failed, pivot Jev to selective routing/abstention only.
+- **Protocol:** One Noul query per claim (`repeats: 1`, see Amendments). Compute raw vs recalibrated ECE, Brier, AUROC with 1,000-iteration cluster-bootstrap CIs grouped by source document.
+- **Robustness checks:** Fresh-call nondeterminism and *wording* invariance (paraphrased instructions). (Option-name swap was dropped: the API takes no `options`.)
+- **Gate 1 Criterion (as pre-registered in `configs/thresholds.yaml`):** post-calibration AUROC $\ge 0.75$, ECE $\le 0.08$, Brier $\le 0.12$, nondeterminism divergence $\le 0.03$; calibrator chosen on validation only; evaluated once on the untouched test split. If failed, pivot Jev to selective routing/abstention only.
 
 ### Phase 2: Multi-Agent Candidate Pipeline & Baselines (Week 2)
 - **Objective:** End-to-end multi-agent pipeline on HotpotQA (distractor setting).

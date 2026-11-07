@@ -165,4 +165,5 @@ python scripts/compare_nli.py                                         # Jev vs N
 python scripts/fuse_verifiers.py                                      # does fusing them help? (offline)
 ```
 
-Total live spend for everything above: about $0.17 on the OpenRouter key.
+Total live spend for everything above: about $0.38 (about $0.21 on the first OpenRouter account's key, whose free allowance ran
+out, plus about $0.17 on the second key). Responses from both are in the local cache, so reruns are free.

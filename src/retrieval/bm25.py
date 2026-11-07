@@ -46,3 +46,27 @@ class BM25SnippetRetriever:
         combined_text = "\n".join([snippet for snippet, _ in hits])
         max_score = hits[0][1] if hits else 0.0
         return combined_text, max_score
+
+
+def chunk_document(text: str, words_per_chunk: int = 120, overlap: int = 20) -> List[str]:
+    """Split a long document into overlapping word windows for BM25 indexing."""
+    if words_per_chunk <= overlap:
+        raise ValueError("words_per_chunk must exceed overlap")
+    words = text.split()
+    if len(words) <= words_per_chunk:
+        return [text.strip()] if text.strip() else []
+    step = words_per_chunk - overlap
+    return [" ".join(words[i : i + words_per_chunk]) for i in range(0, len(words), step)
+            if words[i : i + words_per_chunk]]
+
+
+def retrieve_evidence(
+    document: str,
+    claim: str,
+    words_per_chunk: int = 120,
+    overlap: int = 20,
+    top_k: int = 2,
+) -> Tuple[str, float]:
+    """Chunk a long document and return the top_k BM25 snippets (joined) and the best score."""
+    retriever = BM25SnippetRetriever(chunk_document(document, words_per_chunk, overlap))
+    return retriever.get_grounding_context(claim, top_k=top_k)

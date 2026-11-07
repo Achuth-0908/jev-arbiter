@@ -21,6 +21,7 @@ class ClaimVerificationResult(BaseModel):
     latency_ms: float
     cost_usd: float
     cached: bool
+    resolved_version: str = ""
     option_invariance_divergence: Optional[float] = None
     details: Dict[str, Any] = Field(default_factory=dict)
 
@@ -29,6 +30,12 @@ class JevClaimVerifier:
     """Orchestrates Jev Noul verification with recalibration and robustness testing."""
 
     DEFAULT_CRITERIA = "Is the claim strictly and directly supported by the provided evidence text?"
+    # Paraphrase for the wording-invariance probe. (The live API takes no `options`, so an
+    # option-name swap would send an identical request and measure nothing.)
+    ALT_CRITERIA = (
+        "Decide whether the evidence text fully backs up the statement. "
+        "Answer true only if every part of the statement is entailed by the evidence."
+    )
 
     def __init__(
         self,
@@ -49,6 +56,7 @@ class JevClaimVerifier:
         options: Optional[List[str]] = None,
         criteria: Optional[str] = None,
         check_invariance: bool = False,
+        cache_salt: str = "",
     ) -> ClaimVerificationResult:
         """Run Jev Noul verification across repeats and apply calibration."""
         options = options or ["Yes", "No"]
@@ -62,6 +70,7 @@ class JevClaimVerifier:
             criteria=crit,
             repeats=self.repeats,
             clip_bounds=self.clip_bounds,
+            cache_salt=cache_salt,
         )
 
         pos_opt = options[0]
@@ -75,18 +84,16 @@ class JevClaimVerifier:
 
         invariance_diff = None
         if check_invariance:
-            # Swapped / Alternative wording probe: ["True", "False"]
-            alt_options = ["True", "False"]
+            # Wording-invariance probe: same claim/evidence, paraphrased instructions.
             alt_resp = await self.client.evaluate_claim(
                 claim=claim,
                 evidence=evidence,
-                options=alt_options,
-                criteria=crit,
+                options=options,
+                criteria=self.ALT_CRITERIA,
                 repeats=self.repeats,
                 clip_bounds=self.clip_bounds,
             )
-            alt_p = alt_resp.clipped_probabilities.get(alt_options[0], 0.50)
-            invariance_diff = abs(raw_p - alt_p)
+            invariance_diff = abs(raw_p - alt_resp.clipped_probabilities.get(pos_opt, 0.50))
 
         return ClaimVerificationResult(
             claim=claim,
@@ -98,6 +105,7 @@ class JevClaimVerifier:
             latency_ms=resp.latency_ms,
             cost_usd=resp.cost_usd,
             cached=resp.cached,
+            resolved_version=resp.resolved_version,
             option_invariance_divergence=invariance_diff,
             details={"mean_probabilities": resp.mean_probabilities},
         )

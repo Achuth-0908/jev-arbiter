@@ -1,0 +1,23 @@
+# Phase 1: Jev calibration probe on LLM-AggreFact.
+# Calibration + validation come from the official dev split (grouped by source document);
+# the official test split is scored only with --include-test AND a valid pre-registration.
+name: phase1
+mode: live
+
+data:
+  max_per_subdataset_dev: 200
+  max_per_subdataset_test: 200
+
+retrieval:
+  words_per_chunk: 120
+  overlap: 20
+  top_k: 2
+
+# Hard cap on live spend for a run (aborts cleanly; finished work stays cached and the run resumes free).
+budget_usd: 0.10
+
+jev:
+  repeats: 1
+  derive_from_repeats: 3   # reuse the earlier 3-repeat calibration/validation calls as repeat-1 views (no new calls)
+  concurrency: 8
+  # requests_per_second: 20   # uncomment to cap global request rate if the API starts returning 429s

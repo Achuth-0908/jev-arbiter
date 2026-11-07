@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 import numpy as np
 from pydantic import BaseModel, Field
 
@@ -98,9 +98,17 @@ class BenchmarkRunner:
     async def run_full_comparison(
         self,
         qa_instances: List[Any],
+        label_fn: Callable[[Any, Any], int],
         temp_scaler: Optional[TemperatureScaler] = None,
     ) -> List[StrategyEvaluationResult]:
-        """Run comparison across all strategy rungs."""
+        """Run comparison across all strategy rungs.
+
+        ``label_fn(qa_instance, arbitrated_claim) -> {0, 1}`` supplies ground truth for each
+        claim (1 = factually correct). It is required: this runner never infers labels, and it
+        raises rather than substituting placeholder metrics when no labeled claims exist.
+        Metrics are pooled over all claims; question-level cluster bootstrap CIs are computed
+        downstream from the per-claim records in ``metadata['records']``.
+        """
         strategies = [
             ("Majority Vote", "majority_vote"),
             ("Self-Confidence Weighted", "self_confidence"),
@@ -119,11 +127,12 @@ class BenchmarkRunner:
         results: List[StrategyEvaluationResult] = []
 
         for display_name, strat_key in strategies:
-            strat_accs = []
-            strat_briers = []
-            strat_eces = []
-            strat_costs = []
-            strat_latencies = []
+            labels: List[int] = []
+            scores: List[float] = []
+            accepted: List[int] = []
+            groups: List[str] = []
+            costs: List[float] = []
+            latencies: List[float] = []
 
             for qa in qa_instances:
                 arb_res = await engine.arbitrate(
@@ -133,37 +142,53 @@ class BenchmarkRunner:
                     reference_documents=qa.passages,
                     strategy=strat_key,
                 )
+                costs.append(arb_res.total_cost_usd)
+                latencies.append(arb_res.total_latency_ms)
 
-                strat_costs.append(arb_res.total_cost_usd)
-                strat_latencies.append(arb_res.total_latency_ms)
+                for ac in arb_res.arbitrated_claims:
+                    labels.append(int(label_fn(qa, ac)))
+                    scores.append(_strategy_score(strat_key, ac))
+                    accepted.append(1 if ac.status == "ACCEPTED" else 0)
+                    groups.append(str(qa.id))
 
-                # Measure factual grounding accuracy: fraction of accepted claims that are accurate
-                if arb_res.arbitrated_claims:
-                    labels = [1 if ("oppenheimer" in ac.canonical_claim.lower() or "1998" in ac.canonical_claim.lower() or "synthesize" in ac.canonical_claim.lower() or "lack" in ac.canonical_claim.lower()) else 0 for ac in arb_res.arbitrated_claims]
-                    scores = [ac.fused_prob if strat_key == "calibrated_fusion" else (ac.calibrated_jev_prob if strat_key == "calibrated_jev" else ac.raw_agreement_ratio) for ac in arb_res.arbitrated_claims]
-                    preds = [1 if ac.status == "ACCEPTED" else 0 for ac in arb_res.arbitrated_claims]
-                    
-                    strat_accs.append(float(np.mean(np.array(preds) == np.array(labels))))
-                    strat_briers.append(brier_score(np.array(labels), np.array(scores)))
-                    strat_eces.append(expected_calibration_error(np.array(labels), np.array(scores), n_bins=5))
+            if not labels:
+                raise ValueError(f"No labeled claims produced for strategy {display_name!r}")
 
-            mean_acc = float(np.mean(strat_accs)) if strat_accs else 0.80
-            mean_brier = float(np.mean(strat_briers)) if strat_briers else 0.10
-            mean_ece = float(np.mean(strat_eces)) if strat_eces else 0.08
-            mean_cost = float(np.mean(strat_costs)) if strat_costs else 0.001
-            mean_lat = float(np.mean(strat_latencies)) if strat_latencies else 250.0
+            y = np.array(labels)
+            p = np.array(scores)
+            acc_mask = np.array(accepted) == 1
+            precision = float(np.mean(y[acc_mask])) if acc_mask.any() else float("nan")
 
             results.append(
                 StrategyEvaluationResult(
                     strategy_name=display_name,
-                    accuracy=mean_acc,
-                    brier=mean_brier,
-                    ece=mean_ece,
-                    auroc=min(0.99, mean_acc + 0.05),
-                    mean_latency_ms=mean_lat,
-                    mean_cost_usd=mean_cost,
-                    n_samples=len(qa_instances),
+                    accuracy=float(np.mean((p >= 0.5).astype(int) == y)),
+                    brier=brier_score(y, p),
+                    ece=expected_calibration_error(y, p, n_bins=10),
+                    auroc=auroc_score(y, p),
+                    mean_latency_ms=float(np.mean(latencies)),
+                    mean_cost_usd=float(np.mean(costs)),
+                    n_samples=len(labels),
+                    metadata={
+                        "accepted_precision": precision,
+                        "n_accepted": int(acc_mask.sum()),
+                        "n_questions": len(qa_instances),
+                        "records": {"y": labels, "score": scores, "accepted": accepted, "group": groups},
+                    },
                 )
             )
 
         return results
+
+
+def _strategy_score(strategy: str, ac: Any) -> float:
+    """The probability-like score each strategy actually thresholds on."""
+    if strategy == "calibrated_fusion":
+        return float(ac.fused_prob)
+    if strategy == "calibrated_jev":
+        return float(ac.calibrated_jev_prob)
+    if strategy == "raw_jev":
+        return float(ac.raw_jev_prob)
+    if strategy == "self_confidence":
+        return float(ac.raw_agreement_ratio * ac.mean_self_confidence)
+    return float(ac.raw_agreement_ratio)

@@ -85,7 +85,7 @@ class UnifiedLLMClient:
             temperature=temperature,
             max_tokens=max_tokens,
         )
-        cache_key = req.cache_key(self.endpoint)
+        cache_key = req.cache_key(self.endpoint, mode="mock" if self.mock_mode else "live")
 
         # Check Cache
         cached_entry = self.cache.get(cache_key)

@@ -97,8 +97,10 @@ def create_frozen_splits(
     seed: int = 42,
 ) -> Tuple[List[FactClaimInstance], List[FactClaimInstance], List[FactClaimInstance]]:
     """Partition instances into calibration, validation, and test sets.
-    
-    Stratified by label and subdataset to prevent distribution skew across splits.
+
+    WARNING: splits per *claim*, so claims sharing a source document can land in different
+    splits (leakage). Only acceptable for the synthetic demo fixture. For real data use
+    ``src.data.aggrefact.create_grouped_splits``.
     """
     assert abs(cal_ratio + val_ratio + test_ratio - 1.0) < 1e-5, "Split ratios must sum to 1.0"
     

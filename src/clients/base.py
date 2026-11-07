@@ -23,17 +23,24 @@ class DecisionRequest(BaseModel):
     options: List[str] = Field(default_factory=lambda: ["Yes", "No"])
     criteria: str = "Is the claim strictly supported by the provided evidence?"
     repeats: int = 3
+    cache_salt: str = ""  # non-empty salt forces a fresh, separately cached call (nondeterminism probes)
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
-    def cache_key(self, endpoint: str) -> str:
+    def cache_key(self, endpoint: str, mode: str = "live") -> str:
+        """Content-addressed key. `mode` ("live"|"mock") and `repeats` are part of the
+        key so mock output can never be served as live, nor repeats=1 as repeats=3."""
         data = {
             "endpoint": endpoint,
+            "mode": mode,
             "model": self.model,
             "decision_type": self.decision_type,
             "state": self.state,
             "options": self.options,
             "criteria": self.criteria,
+            "repeats": self.repeats,
         }
+        if self.cache_salt:  # absent when empty, so existing keys are unchanged
+            data["cache_salt"] = self.cache_salt
         return canonical_json_hash(data)
 
 
@@ -66,9 +73,10 @@ class LLMRequest(BaseModel):
     max_tokens: int = 512
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
-    def cache_key(self, endpoint: str) -> str:
+    def cache_key(self, endpoint: str, mode: str = "live") -> str:
         data = {
             "endpoint": endpoint,
+            "mode": mode,
             "model": self.model,
             "messages": self.messages,
             "temperature": self.temperature,

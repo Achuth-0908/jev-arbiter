@@ -8,6 +8,7 @@ import numpy as np
 from pydantic import BaseModel, Field
 from scipy.special import expit, logit
 
+from ..config import load_thresholds
 from ..claims.extractor import AtomicClaim, ClaimExtractor
 from ..claims.cluster import ClaimCluster, cluster_claims
 from ..retrieval.bm25 import BM25SnippetRetriever
@@ -55,14 +56,16 @@ class ArbitrationEngine:
         self,
         verifier: Optional[JevClaimVerifier] = None,
         extractor: Optional[ClaimExtractor] = None,
-        acceptance_threshold: float = 0.65,
-        abstention_threshold: float = 0.35,
+        acceptance_threshold: Optional[float] = None,
+        abstention_threshold: Optional[float] = None,
         default_mean_phi: float = 0.30,
     ):
+        """Thresholds default to the pre-registered values in configs/thresholds.yaml."""
+        thr = load_thresholds()
         self.verifier = verifier or JevClaimVerifier()
         self.extractor = extractor or ClaimExtractor()
-        self.acceptance_threshold = acceptance_threshold
-        self.abstention_threshold = abstention_threshold
+        self.acceptance_threshold = thr.acceptance_threshold if acceptance_threshold is None else acceptance_threshold
+        self.abstention_threshold = thr.abstention_threshold if abstention_threshold is None else abstention_threshold
         self.mean_phi = default_mean_phi
 
     def compute_fused_probability(

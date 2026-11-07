@@ -2,7 +2,7 @@ jev:
   endpoint: "https://openrouter.ai/api/alpha/decisions"
   model: "typesafe/jev-1.13"
   decision_type: "noul"
-  repeat_count: 3
+  repeat_count: 1   # informational; the run spec (configs/runs/*.yaml) and thresholds.yaml are authoritative
   clip_bounds: [0.01, 0.99]
   concurrency_limit: 5
   timeout_seconds: 60

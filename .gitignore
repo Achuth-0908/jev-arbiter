@@ -51,3 +51,12 @@ cache/
 .ipynb_checkpoints
 .DS_Store
 Thumbs.db
+
+# Licensed datasets (CC-BY-ND) - never commit
+/data/
+
+# Per-run artifacts (derived from licensed data)
+results/runs/
+
+# Per-claim analysis outputs (ids/labels/scores derived from licensed data); keep only the .md summaries
+results/analysis/**/*.parquet

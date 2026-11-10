@@ -1,0 +1,8 @@
+arm,type,brier,ci_lo,ci_hi
+Base rate only (ignores the claim),control,0.179,0.169,0.189
+Raw Jev,-,0.158,0.147,0.169
+Global temperature scaling,agnostic,0.153,0.144,0.162
+Global isotonic (current method),agnostic,0.146,0.137,0.155
+Logistic + length and BM25 features,agnostic,0.144,0.134,0.153
+Per-dataset isotonic,domain-aware,0.131,0.122,0.141
+Logistic + per-dataset intercept,domain-aware,0.128,0.119,0.137

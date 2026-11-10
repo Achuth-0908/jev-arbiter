@@ -1,0 +1,6 @@
+step,description
+Leak-free splits,No source document appears in two splits
+Evidence retrieval,BM25 snippets from the source document
+Jev verifier,"Cached, rate-limited, spend-capped"
+Calibration,"Fit on calibration data, chosen on validation"
+Test scored once,Only if the registered thresholds hash matches
